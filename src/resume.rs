@@ -6,7 +6,7 @@ use crate::index;
 
 pub fn run(conn: &rusqlite::Connection, file_id: &str) -> Result<()> {
     let row = index::session_row(conn, file_id)?
-        .ok_or_else(|| anyhow!("session not found: {} (try `cc-search reindex`)", file_id))?;
+        .ok_or_else(|| anyhow!("session not found: {} (try `ccfind reindex`)", file_id))?;
 
     let candidates: Vec<String> = std::iter::once(row.cwd.clone())
         .chain(std::iter::once(Some(row.project_dir.clone())))
@@ -20,7 +20,7 @@ pub fn run(conn: &rusqlite::Connection, file_id: &str) -> Result<()> {
             chosen = Some(c.clone());
             break;
         } else {
-            eprintln!("cc-search: cwd unavailable: {}", c);
+            eprintln!("ccfind: cwd unavailable: {}", c);
         }
     }
     let target = chosen.ok_or_else(|| anyhow!("no usable cwd found"))?;

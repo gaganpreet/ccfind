@@ -108,7 +108,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "cc-search"
+name = "ccfind"
 version = "0.1.0"
 dependencies = [
  "anyhow",

@@ -13,7 +13,7 @@ mod stats;
 use crate::search::{ScopeFlag, SearchOpts};
 
 #[derive(Parser, Debug)]
-#[command(name = "cc-search", version, about = "Global fzf-driven search across all Claude Code sessions")]
+#[command(name = "ccfind", version, about = "Global fzf-driven search across all Claude Code sessions")]
 struct Cli {
     /// Search terms (optional). If omitted, opens fzf streaming all sessions.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -85,7 +85,7 @@ enum Sub {
 
 fn main() {
     if let Err(e) = real_main() {
-        eprintln!("cc-search: {:#}", e);
+        eprintln!("ccfind: {:#}", e);
         std::process::exit(1);
     }
 }
@@ -173,7 +173,7 @@ fn pick_scope(cli: &Cli) -> ScopeFlag {
             "tools" | "tool" => ScopeFlag::Tools,
             "all" => ScopeFlag::All,
             other => {
-                eprintln!("cc-search: unknown scope '{}', defaulting to user", other);
+                eprintln!("ccfind: unknown scope '{}', defaulting to user", other);
                 ScopeFlag::User
             }
         };

@@ -108,7 +108,7 @@ const CONTEXT_AFTER: usize = 3;
 
 pub fn run(conn: &rusqlite::Connection, file_id: &str, match_query: Option<&str>) -> Result<()> {
     let row = index::session_row(conn, file_id)?
-        .ok_or_else(|| anyhow!("session not found: {} (try `cc-search reindex`)", file_id))?;
+        .ok_or_else(|| anyhow!("session not found: {} (try `ccfind reindex`)", file_id))?;
 
     print_header(&row);
 

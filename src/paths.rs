@@ -8,7 +8,7 @@ pub fn projects_dir() -> Result<PathBuf> {
 
 pub fn cache_dir() -> Result<PathBuf> {
     let cache = dirs::cache_dir().ok_or_else(|| anyhow!("no cache dir"))?;
-    let dir = cache.join("cc-search");
+    let dir = cache.join("ccfind");
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
 }
