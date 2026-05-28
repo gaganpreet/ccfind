@@ -130,10 +130,19 @@ pub fn search(conn: &Connection, opts: &SearchOpts) -> Result<Vec<Hit>> {
 
     let limit = if opts.limit == 0 { 500 } else { opts.limit };
     if opts.query.is_some() {
-        // Order by bm25 + age penalty; we'll dedupe by file_id in Rust below.
-        // Over-fetch since we may drop duplicates.
+        // Ranking: bm25 (lower = better) + age penalty (newer = lower).
+        // Linear 0.02/day handles the long tail; step bonuses pull "still working
+        // on this" sessions to the top regardless of bm25 differences.
         sql.push_str(&format!(
-            " ORDER BY bm25(messages_fts) + ((strftime('%s','now') - m.ts) / 86400.0) * 0.005 ASC LIMIT {}",
+            r#" ORDER BY bm25(messages_fts)
+                       + ((strftime('%s','now') - m.ts) / 86400.0) * 0.02
+                       + CASE
+                           WHEN (strftime('%s','now') - m.ts) <  3600  THEN -3.0
+                           WHEN (strftime('%s','now') - m.ts) < 86400  THEN -1.5
+                           WHEN (strftime('%s','now') - m.ts) < 604800 THEN -0.5
+                           ELSE 0
+                         END
+                  ASC LIMIT {}"#,
             limit * 8
         ));
     } else {
