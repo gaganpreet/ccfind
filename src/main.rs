@@ -16,7 +16,9 @@ use crate::search::{ScopeFlag, SearchOpts};
 #[command(name = "ccfind", version, about = "Global fzf-driven search across all Claude Code sessions")]
 struct Cli {
     /// Search terms (optional). If omitted, opens fzf streaming all sessions.
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    /// Flags can come before, after, or interleaved with terms. To search for
+    /// text that starts with `-`, prefix the terms with `--` (e.g. `ccfind -- -foo`).
+    #[arg(num_args = 0..)]
     terms: Vec<String>,
 
     /// Search scope: user (default), assistant, tools, all
