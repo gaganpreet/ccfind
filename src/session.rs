@@ -91,6 +91,7 @@ pub enum Scope {
     User,
     Assistant,
     Tool,
+    Meta,
 }
 
 impl Scope {
@@ -99,6 +100,7 @@ impl Scope {
             Scope::User => "user",
             Scope::Assistant => "assistant",
             Scope::Tool => "tool",
+            Scope::Meta => "meta",
         }
     }
 }

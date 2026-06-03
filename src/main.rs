@@ -155,6 +155,18 @@ fn real_main() -> Result<()> {
     };
 
     let hits = search::search(&conn, &opts)?;
+
+    // Interactive content-search: no query supplied, fzf wanted. Hand off to
+    // the reload-based picker so typing into fzf runs a real FTS5 query
+    // instead of fuzzy-matching the displayed columns.
+    if query.is_none() && !cli.no_fzf {
+        if hits.is_empty() {
+            eprintln!("index is empty (try `ccfind reindex`)");
+            return Ok(());
+        }
+        return picker::run_fzf_interactive(&hits);
+    }
+
     if hits.is_empty() {
         eprintln!("no results");
         return Ok(());

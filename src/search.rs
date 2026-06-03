@@ -13,10 +13,12 @@ pub enum ScopeFlag {
 impl ScopeFlag {
     pub fn to_scopes(self) -> &'static [&'static str] {
         match self {
-            ScopeFlag::User => &["user"],
-            ScopeFlag::Assistant => &["user", "assistant"],
-            ScopeFlag::Tools => &["user", "tool"],
-            ScopeFlag::All => &["user", "assistant", "tool"],
+            // 'meta' rows carry slug/title/branch/cwd so typing those still
+            // finds sessions even when the body doesn't mention them.
+            ScopeFlag::User => &["user", "meta"],
+            ScopeFlag::Assistant => &["user", "assistant", "meta"],
+            ScopeFlag::Tools => &["user", "tool", "meta"],
+            ScopeFlag::All => &["user", "assistant", "tool", "meta"],
         }
     }
 }
@@ -76,11 +78,16 @@ pub fn search(conn: &Connection, opts: &SearchOpts) -> Result<Vec<Hit>> {
     let mut sql = String::new();
     let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
-    if let Some(q) = &opts.query {
-        let sanitized = sanitize_query(q);
-        if sanitized.is_empty() {
-            return Ok(Vec::new());
-        }
+    // Normalize query: treat None / empty / whitespace-only as "no query".
+    // This lets the fzf reload path call `ccfind --no-fzf --` with whatever
+    // the user has typed; an empty query falls through to recent sessions.
+    let effective_query = opts
+        .query
+        .as_ref()
+        .map(|q| sanitize_query(q))
+        .filter(|s| !s.is_empty());
+
+    if let Some(sanitized) = effective_query.as_ref() {
         sql.push_str(&format!(
             r#"SELECT s.file_id, s.cwd, s.git_branch, s.project_dir, m.ts, m.scope,
                       snippet(messages_fts, 0, '', '', '…', 12) AS snip
@@ -91,7 +98,7 @@ pub fn search(conn: &Connection, opts: &SearchOpts) -> Result<Vec<Hit>> {
                   AND m.scope IN ({})"#,
             scope_placeholders
         ));
-        params.push(Box::new(sanitized));
+        params.push(Box::new(sanitized.clone()));
         for sc in scopes {
             params.push(Box::new(sc.to_string()));
         }
@@ -120,7 +127,7 @@ pub fn search(conn: &Connection, opts: &SearchOpts) -> Result<Vec<Hit>> {
         params.push(Box::new(g.clone()));
     }
     if let Some(since) = opts.since {
-        if opts.query.is_some() {
+        if effective_query.is_some() {
             sql.push_str(" AND m.ts >= ?");
         } else {
             sql.push_str(" AND COALESCE(s.last_seen, 0) >= ?");
@@ -129,7 +136,7 @@ pub fn search(conn: &Connection, opts: &SearchOpts) -> Result<Vec<Hit>> {
     }
 
     let limit = if opts.limit == 0 { 500 } else { opts.limit };
-    if opts.query.is_some() {
+    if effective_query.is_some() {
         // Ranking: bm25 (lower = better) + age penalty (newer = lower).
         // Linear 0.02/day handles the long tail; step bonuses pull "still working
         // on this" sessions to the top regardless of bm25 differences.

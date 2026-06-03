@@ -10,23 +10,25 @@ use walkdir::WalkDir;
 use crate::paths;
 use crate::session::{Action, Event};
 
-pub const SCHEMA_VERSION: i32 = 1;
+pub const SCHEMA_VERSION: i32 = 2;
 
 const REFRESH_DEBOUNCE_SECS: i64 = 2;
 
 pub fn open() -> Result<Connection> {
     let path = paths::index_db_path()?;
-    let conn = Connection::open(&path)
+    let mut conn = Connection::open(&path)
         .with_context(|| format!("opening sqlite db at {}", path.display()))?;
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.pragma_update(None, "temp_store", "MEMORY")?;
-    init_schema(&conn)?;
+    init_schema_or_migrate(&mut conn)?;
     Ok(conn)
 }
 
-fn init_schema(conn: &Connection) -> Result<()> {
+fn init_schema_or_migrate(conn: &mut Connection) -> Result<()> {
+    // The `meta` table might not exist yet on a fresh DB; SELECT will fail.
+    // Try once; on failure, treat as fresh.
     let existing: Option<String> = conn
         .query_row(
             "SELECT v FROM meta WHERE k='schema_version'",
@@ -34,21 +36,23 @@ fn init_schema(conn: &Connection) -> Result<()> {
             |r| r.get(0),
         )
         .ok();
-    if existing.is_none() {
-        conn.execute_batch(SCHEMA_SQL)?;
-        conn.execute(
-            "INSERT OR REPLACE INTO meta(k,v) VALUES('schema_version', ?1)",
-            params![SCHEMA_VERSION.to_string()],
-        )?;
-    } else if let Some(v) = existing {
-        let v: i32 = v.parse().unwrap_or(0);
-        if v != SCHEMA_VERSION {
-            anyhow::bail!(
-                "index schema_version={} but binary expects {}. Delete {} and re-run.",
-                v,
-                SCHEMA_VERSION,
-                paths::index_db_path()?.display()
+    match existing.and_then(|v| v.parse::<i32>().ok()) {
+        None => {
+            conn.execute_batch(SCHEMA_SQL)?;
+            conn.execute(
+                "INSERT OR REPLACE INTO meta(k,v) VALUES('schema_version', ?1)",
+                params![SCHEMA_VERSION.to_string()],
+            )?;
+        }
+        Some(v) if v == SCHEMA_VERSION => {}
+        Some(v) => {
+            eprintln!(
+                "ccfind: migrating index schema v{} → v{} (rebuild ~4s)…",
+                v, SCHEMA_VERSION
             );
+            // reindex_full drops and recreates all tables (including `meta`),
+            // then stamps the new schema_version.
+            reindex_full(conn)?;
         }
     }
     Ok(())
@@ -486,6 +490,10 @@ fn write_parsed(conn: &mut Connection, parsed: Vec<ParsedFile>) -> Result<()> {
                 pf.size as i64,
                 row_count,
             ])?;
+            // Compute meta body now while we still hold pf by ref.
+            let meta_body = meta_body_for(&pf);
+            let ts_for_meta = if pf.last_seen > 0 { pf.last_seen } else { pf.mtime };
+
             for row in pf.rows {
                 ins_msg.execute(params![
                     pf.file_id,
@@ -498,10 +506,59 @@ fn write_parsed(conn: &mut Connection, parsed: Vec<ParsedFile>) -> Result<()> {
                 let rowid = tx.last_insert_rowid();
                 ins_fts.execute(params![rowid, row.body])?;
             }
+
+            // Meta scope row: one per session, holding slug/title/branch/cwd
+            // so the fzf interactive reload can find sessions by metadata too.
+            // Replace on every write so it reflects latest known values.
+            tx.execute(
+                "DELETE FROM messages WHERE file_id = ?1 AND scope = 'meta'",
+                params![&pf.file_id],
+            )?;
+            if !meta_body.is_empty() {
+                ins_msg.execute(params![
+                    pf.file_id,
+                    Option::<String>::None,
+                    ts_for_meta,
+                    "meta",
+                    Option::<String>::None,
+                    0_i64,
+                ])?;
+                let rowid = tx.last_insert_rowid();
+                ins_fts.execute(params![rowid, meta_body])?;
+            }
         }
     }
     tx.commit()?;
     Ok(())
+}
+
+fn meta_body_for(pf: &ParsedFile) -> String {
+    // Emit three tokenizations so any reasonable query lands a hit:
+    //   1) original     — `feat/google-workspace-phase2` (matches the full token)
+    //   2) slash-split  — `feat google-workspace-phase2` (matches dash-joined token)
+    //   3) fully-split  — `feat google workspace phase2` (matches any single word)
+    // Cost: ~3x meta body size, still <1KB per session.
+    let mut parts: Vec<&str> = Vec::new();
+    if let Some(s) = &pf.slug { if !s.is_empty() { parts.push(s); } }
+    if let Some(t) = &pf.ai_title { if !t.is_empty() { parts.push(t); } }
+    if let Some(b) = &pf.git_branch { if !b.is_empty() { parts.push(b); } }
+    if let Some(c) = &pf.cwd { if !c.is_empty() { parts.push(c); } }
+    if !pf.project_dir.is_empty() && Some(&pf.project_dir) != pf.cwd.as_ref() {
+        parts.push(&pf.project_dir);
+    }
+    let original = parts.join(" | ");
+    if original.is_empty() {
+        return original;
+    }
+    let slash_split: String = original
+        .chars()
+        .map(|c| if c == '/' { ' ' } else { c })
+        .collect();
+    let fully_split: String = original
+        .chars()
+        .map(|c| if matches!(c, '/' | '-' | '_' | '.') { ' ' } else { c })
+        .collect();
+    format!("{} {} {}", original, slash_split, fully_split)
 }
 
 pub fn session_row(
